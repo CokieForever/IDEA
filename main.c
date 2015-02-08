@@ -18,6 +18,8 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
+//#define __MSVCRT_VERSION__	0x0601
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,19 +34,21 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "utility.h"
 #include "idea.h"
 
-#define _VERSION	"0.1"
+#define _VERSION	"0.1.1"
 
 #define ENCRYPT		1
 #define DECRYPT		2
 
 #define MAX_ENTRIES	10000
 
+typedef __int64	Sint64;
+
 static void Purge(void);
 static void Clean(char chaine[]);
 
 static int CheckDirOrFile(const char *fullAddr);
-static long int GetFileSize(const char *fullAddr);
-static int ListDirectory(const char *dirAddr, int listSubDirs, char **addrLists, int max, long int *size);
+static Sint64 GetFileSize(const char *fullAddr);
+static int ListDirectory(const char *dirAddr, int listSubDirs, char **addrLists, int max, Sint64 *size);
 
 static void FreeStrTab(char **strTab, int num);
 static void Wait();
@@ -62,7 +66,7 @@ int main(void)
 	int i, ok = 0, r = 0, count = 0, nbFails = 0;
 	int autoOverwrite = 0, autoDelete = 0, encryptName = 0;
 	int mode = 0;
-	long int totalSize = 0;
+	Sint64 totalSize = 0;
 	clock_t t;
 	double delay;
 
@@ -285,8 +289,8 @@ char EnterChar(const char *allowedChars)
 
 static int CheckDirOrFile(const char *fullAddr)
 {
-	struct stat s;
-	int err = stat(fullAddr, &s);
+	struct _stati64 s;
+	int err = _stati64(fullAddr, &s);
 
 	if(-1 == err)
 	{
@@ -304,13 +308,13 @@ static int CheckDirOrFile(const char *fullAddr)
 	}
 }
 
-static long int GetFileSize(const char *fullAddr)
+static Sint64 GetFileSize(const char *fullAddr)
 {
-	struct stat s;
-	return (stat(fullAddr, &s) < 0 || S_ISDIR(s.st_mode)) ? 0 : s.st_size;
+	struct _stati64 s;
+	return (_stati64(fullAddr, &s) < 0 || S_ISDIR(s.st_mode)) ? 0 : s.st_size;
 }
 
-static int ListDirectory(const char *dirAddr, int listSubDirs, char **addrLists, int max, long int *size)
+static int ListDirectory(const char *dirAddr, int listSubDirs, char **addrLists, int max, Sint64 *size)
 {
 	DIR *dp;
 	struct dirent *ep;
@@ -330,7 +334,7 @@ static int ListDirectory(const char *dirAddr, int listSubDirs, char **addrLists,
 				r = CheckDirOrFile(curAddr);
 				if (r == 1 && listSubDirs)
 				{
-					long int s = 0;
+					Sint64 s = 0;
 					r = ListDirectory(curAddr, 1, &(addrLists[i]), max-i, size ? &s : NULL);
 					if (size)
 						*size = (*size) + s;
