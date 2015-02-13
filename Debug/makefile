@@ -28,7 +28,7 @@ all: IDEA.exe
 IDEA.exe: $(OBJS) $(USER_OBJS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: MinGW C Linker'
-	gcc  -o "IDEA.exe" $(OBJS) $(USER_OBJS) $(LIBS)
+	gcc -L"C:\MinGW\lib_perso\pthreads\lib" -o "IDEA.exe" $(OBJS) $(USER_OBJS) $(LIBS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 

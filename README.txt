@@ -1,8 +1,8 @@
 The IDEA Project - Data encryption program based on the IDEA (International Data Encryption Algorithm)
 
 Author: Quoc-Nam Dessoulles
-Version: 0.1
-Last build: 06/02/2015
+Version: 0.2
+Last build: 13/02/2015
 License: GNU GPL v2.0 (see the file "LICENSE.txt")
 
 The executable file was built with Eclipse CDT Luna (MinGW GCC 32 bits toolchain) under Windows 8.1 64 bits.

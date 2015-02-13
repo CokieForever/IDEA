@@ -21,14 +21,28 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "idea.h"
 
 //#define INCLUDE_USELESS
+#define NUM_THREADS				4
+#define DATA_BUF_SIZE			1000000		//Must be multiple of 8
+#define BLOCK_MIN_PER_THREAD	500
+
+typedef struct
+{
+	const Uint16 *in;
+	Uint16 *out;
+	Uint32 num;
+	Uint8 encrypt;
+} ProcessMTStruct;
 
 static Uint16 mainPartialKeys[9][6] = {{0}};
 static Uint16 mainPartialInvertedKeys[9][6] = {{0}};
+static Uint16 mainDataBuf[DATA_BUF_SIZE/sizeof(Uint16)] = {0};
 
 #ifdef INCLUDE_USELESS
 static Uint16 StrToUint16(const char *str, const char **p);
 static Uint8 CharToUint8(char c);
 #endif	//INCLUDE_USELESS
+
+static void* Process_MT_sub(void *data);
 
 static void ShiftKey(Uint16 *partialKeys);
 static const Uint16* GetPartialKeys(unsigned int roundNum);
@@ -150,7 +164,7 @@ int EncryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 {
 	FILE *fileIn = fopen(fileNameIn, "rb");
 	FILE *fileOut = NULL;
-	Uint16 data[4], checkSum[8], l;
+	Uint16 checkSum[8], l;
 	size_t n;
 	Uint8 padding;
 	Uint16 *cryptedFileName = NULL;
@@ -187,7 +201,7 @@ int EncryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 
 	if (fwrite(keySha, 1, 32, fileOut) != 32 || fwrite(checkSum, 1, 16, fileOut) != 16 || fwrite(&padding, 1, 1, fileOut) != 1)
 	{
-		printf("An error occurred during writing in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
+		printf("An error occurred during writing header in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
 		fclose(fileIn); fclose(fileOut);
 		remove(fileNameOut);
 		return 0;
@@ -207,24 +221,32 @@ int EncryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 
 	if (fwrite(&l, 2, 1, fileOut) != 1 || fwrite(cryptedFileName, 1, l, fileOut) != l)
 	{
-		printf("An error occurred during writing in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
+		printf("An error occurred during writing file name in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
 		fclose(fileIn); fclose(fileOut);
 		remove(fileNameOut);
 		return 0;
 	}
 	free(cryptedFileName);
 
-	while ((n = fread(data, 1, 8, fileIn)) > 0)
+	memset(mainDataBuf, 0, DATA_BUF_SIZE);
+	while ((n = fread(mainDataBuf, 1, DATA_BUF_SIZE, fileIn)) > 0)
 	{
-		Encrypt(data, data);
-		if (fwrite(data, 1, 8, fileOut) != 8)
+		n = (n+7)/8 * 8;
+		if (!Process_MT(mainDataBuf, mainDataBuf, n, 1))
 		{
-			printf("An error occurred during writing in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
 			fclose(fileIn); fclose(fileOut);
 			remove(fileNameOut);
 			return 0;
 		}
-		memset(data, 0, 8);
+
+		if (fwrite(mainDataBuf, 1, n, fileOut) != n)
+		{
+			printf("An error occurred during writing data in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
+			fclose(fileIn); fclose(fileOut);
+			remove(fileNameOut);
+			return 0;
+		}
+		memset(mainDataBuf, 0, DATA_BUF_SIZE);
 	}
 
 	fclose(fileOut);
@@ -245,7 +267,7 @@ int DecryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 	FILE *fileIn = fopen(fileNameIn, "rb");
 	FILE *fileOut = NULL;
 	Uint16 keySha[16];
-	Uint16 checkSum[8], checkSum0[8], data[4];
+	Uint16 checkSum[8], checkSum0[8];
 	Uint16 c = 0;
 	size_t n, nbBlocks = 0, l;
 	Uint8 padding = 0;
@@ -280,7 +302,7 @@ int DecryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 		if (feof(fileIn))
 			printf("%s is not a valid file.\n", fileNameIn);
 		else
-			printf("An error occurred during reading from %s: %s\n", fileNameIn, strerror(ferror(fileIn)));
+			printf("An error occurred during reading header from %s: %s\n", fileNameIn, strerror(ferror(fileIn)));
 		fclose(fileIn); fclose(fileOut);
 		remove(fileNameOut);
 		return 0;
@@ -296,18 +318,27 @@ int DecryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 		}
 	}
 
-	nbBlocks = (nbBlocks-(51+c)+7) / 8;
+	nbBlocks = (nbBlocks-(51+c)+(DATA_BUF_SIZE-1)) / DATA_BUF_SIZE;
 	fseek(fileIn, c, SEEK_CUR);
 
-	for (i=1 ; (n = fread(data, 1, 8, fileIn)) > 0 ; i++)
+	memset(mainDataBuf, 0, DATA_BUF_SIZE);
+	for (i=1 ; (n = fread(mainDataBuf, 1, DATA_BUF_SIZE, fileIn)) > 0 ; i++)
 	{
-		Decrypt(data, data);
 		l = n;
 		if (i == nbBlocks)
 			l -= padding;
-		if (fwrite(data, 1, l, fileOut) != l)
+
+		n = (n+7)/8 * 8;
+		if (!Process_MT(mainDataBuf, mainDataBuf, n, 0))
 		{
-			printf("An error occurred during writing in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
+			fclose(fileIn); fclose(fileOut);
+			remove(fileNameOut);
+			return 0;
+		}
+
+		if (fwrite(mainDataBuf, 1, l, fileOut) != l)
+		{
+			printf("An error occurred during writing data in %s: %s\n", fileNameOut, strerror(ferror(fileOut)));
 			fclose(fileIn); fclose(fileOut);
 			remove(fileNameOut);
 			return 0;
@@ -316,7 +347,7 @@ int DecryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *k
 
 	if (!feof(fileIn))
 	{
-		printf("An error occurred during reading from %s: %s\n", fileNameIn, strerror(ferror(fileIn)));
+		printf("An error occurred during reading data from %s: %s\n", fileNameIn, strerror(ferror(fileIn)));
 		fclose(fileIn); fclose(fileOut);
 		remove(fileNameOut);
 		return 0;
@@ -425,6 +456,66 @@ int DecryptFileName(const char *fileNameIn, char **fileNameOut, const Uint16 *ke
 	if (!r)
 		free(*fileNameOut);
 	return r;
+}
+
+int Process_MT(const Uint16 *in, Uint16 *out, size_t size, int encrypt)
+{
+	pthread_t threads[NUM_THREADS];
+	ProcessMTStruct pmts[NUM_THREADS];
+	int rc, t;
+	Uint32 nbThreads = (size / 8) / BLOCK_MIN_PER_THREAD;
+	Uint32 blockSize;
+
+	if (nbThreads <= 0)
+	{
+		ProcessMTStruct pmts = {in, out, size/sizeof(Uint16)};
+		Process_MT_sub(&pmts);
+		return 1;
+	}
+
+	if (nbThreads > NUM_THREADS)
+		nbThreads = NUM_THREADS;
+
+	blockSize = size / (sizeof(Uint16) * nbThreads);
+
+	for(t=0 ; t < nbThreads ; t++)
+	{
+		pmts[t].in = &(in[t*blockSize]);
+		pmts[t].out = &(out[t*blockSize]);
+		pmts[t].num = blockSize;
+		pmts[t].encrypt = encrypt;
+
+		rc = pthread_create(&(threads[t]), NULL, Process_MT_sub, &(pmts[t]));
+		if (rc)
+		{
+			printf("Unable to create thread for %s: return code from pthread_create() is %d\n", encrypt ? "encryption" : "decryption", rc);
+			return 0;
+		}
+	}
+
+	for(t=0 ; t < nbThreads ; t++)
+		pthread_join(threads[t], NULL);
+
+	return 1;
+}
+
+static void* Process_MT_sub(void *data)
+{
+	ProcessMTStruct *pmts = (ProcessMTStruct*)data;
+	Uint32 i, n = pmts->num / 4;
+
+	if (pmts->encrypt)
+	{
+		for (i=0 ; i < n ; i++)
+			Encrypt(&(pmts->in[i*4]), &(pmts->out[i*4]));
+	}
+	else
+	{
+		for (i=0 ; i < n ; i++)
+			Decrypt(&(pmts->in[i*4]), &(pmts->out[i*4]));
+	}
+
+	return NULL;
 }
 
 void Encrypt(const Uint16 *in, Uint16 *out)
@@ -649,15 +740,14 @@ int ComputeFileMD5Checksum(FILE *file, Uint16 *checkSum)
 {
 	size_t n = 0;
 	long int t;
-	unsigned char buf[1000] = "";
 	MD5_CTX mdContext = {{0}};
 
 	MD5Init(&mdContext);
 	t = ftell(file);
 	rewind(file);
 
-	while ((n = fread(buf, 1, 1000, file)) > 0)
-		MD5Update(&mdContext, buf, n);
+	while ((n = fread(mainDataBuf, 1, DATA_BUF_SIZE, file)) > 0)
+		MD5Update(&mdContext, (unsigned char*)mainDataBuf, n);
 
 	if (!feof(file))
 	{

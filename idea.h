@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include <pthread.h>
 
 #include "Md5.h"
 #include "sha256.h"
@@ -41,6 +42,7 @@ int DecryptString(Uint16 *string, int n, char *out);
 int EncryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *keySha);
 int DecryptFile(const char *fileNameIn, const char *fileNameOut, const Uint16 *keySha);
 int DecryptFileName(const char *fileNameIn, char **fileNameOut, const Uint16 *keySha0);
+int Process_MT(const Uint16 *in, Uint16 *out, size_t size, int encrypt);
 void Encrypt(const Uint16 *in, Uint16 *out);
 void Decrypt(const Uint16 *in, Uint16 *out);
 
